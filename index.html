@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chord Diagram: IPPU vs On-farm Electricity Use</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <style>
+        body {
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            background-color: #f9f9f9;
+            margin: 0;
+            padding: 0;
+        }
+        h1 {
+            text-align: center;
+            margin: 20px 0 5px 0;
+        }
+        #chart-container { /* Changed ID to chart-container */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0 auto;
+            width: 900px;
+            height: 900px;
+            position: relative;
+        }
+        svg {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 8px;
+            font-size: 14px;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            border-radius: 4px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            font-family: sans-serif;
+        }
+        path.chord {
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        path.chord:hover {
+            opacity: 0.6;
+        }
+        .groupArc {
+            cursor: pointer;
+        }
+        .groupArc:hover {
+            fill-opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chord Diagram: IPPU vs On-farm Electricity Use</h1>
+
+    <div id="chart-container"> 
+        <svg id="chart"> </svg>
+    </div>
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        // CSV with your data
+        const csvUrl = "https://gist.githubusercontent.com/mas5021/546c5cb1aaaaed863bb098b86f71503e/raw/1897725dabe21080a628a0022fa79942c48e1483/merged_climate.csv";
+
+        // Dimensions
+        const width = 800;
+        const height = 800;
+        const innerRadius = Math.min(width, height) * 0.35; // chord radius
+        const outerRadius = innerRadius * 1.08;             // arcs radius
+
+        // Create SVG
+        const svg = d3.select("#chart") // Select the svg inside the container
+            .attr("width", width)
+            .attr("height", height);
+
+        // Main group
+        const g = svg.append("g")
+            .attr("transform", `translate(${width / 2}, ${height / 2})`);
+
+        // Tooltip
+        const tooltip = d3.select("#tooltip");
+
+        // Color scale (adjust as needed)
+        const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+        // Data structures
+        let IPPUSet = new Set();
+        let onfarmSet = new Set();
+
+        // Step 1: Load CSV
+        d3.csv(csvUrl).then(data => {
+
+            // Preprocess: find unique categories
+            data.forEach(d => {
+                // Example columns: d["IPPU"], d["On-farm Electricity Use"], d["total_emission"]
+                IPPUSet.add(d["IPPU"]);
+                onfarmSet.add(d["On-farm Electricity Use"]);
+            });
+
+            // Convert sets to arrays
+            const IPPUCats = Array.from(IPPUSet).filter(d => d.trim() !== "");
+            const OnfarmCats = Array.from(onfarmSet).filter(d => d.trim() !== "");
+
+            // Combine them into one dimension:
+            // First, all IPPU categories, then all On-farm Electricity Use categories
+            const groups = [...IPPUCats, ...OnfarmCats];
+
+            // We'll need a map from groupName -> index in final matrix
+            const indexByName = new Map();
+            groups.forEach((name, i) => indexByName.set(name, i));
+
+            // Prepare NxN matrix
+            const n = groups.length;
+            const matrix = [];
+            for (let i = 0; i < n; i++) {
+                matrix[i] = new Array(n).fill(0);
+            }
+
+            // Step 2: Aggregate sum of total_emission by (IPPU, On-farm Electricity Use)
+            // Then populate the matrix
+            // We'll do a nested dictionary: sumMap[IPPU][onfarm] = sum of total_emission
+            const sumMap = {};
+
+            data.forEach(d => {
+                const iCat = d["IPPU"];
+                const oCat = d["On-farm Electricity Use"];
+                const emission = +d["total_emission"] || 0;
+
+                if (!sumMap[iCat]) sumMap[iCat] = {};
+                if (!sumMap[iCat][oCat]) sumMap[iCat][oCat] = 0;
+                sumMap[iCat][oCat] += emission;
+            });
+
+            // Populate matrix
+            IPPUCats.forEach(iCat => {
+                const iIndex = indexByName.get(iCat);
+                // For each "On-farm Electricity Use" category
+                OnfarmCats.forEach(oCat => {
+                    const jIndex = indexByName.get(oCat);
+                    const val = sumMap[iCat]?.[oCat] || 0;
+                    // Place symmetrical matrix entries
+                    matrix[iIndex][jIndex] = val;
+                    matrix[jIndex][iIndex] = val;
+                });
+            });
+
+            // Step 3: Build chord layout
+            const chord = d3.chord()
+                .padAngle(0.05) // spacing between chords
+                .sortSubgroups(d3.descending); // largest chord on top
+            const chords = chord(matrix);
+
+            // Step 4: Create arc generator
+            const arc = d3.arc()
+                .innerRadius(innerRadius)
+                .outerRadius(outerRadius);
+
+            // Step 5: Draw group arcs
+            const group = g.selectAll("g.group")
+                .data(chords.groups)
+                .enter()
+                .append("g")
+                .attr("class", "group");
+
+            // The arc
+            group.append("path")
+                .attr("class", "groupArc")
+                .style("fill", d => color(d.index))
+                .style("stroke", d => d3.rgb(color(d.index)).darker())
+                .attr("d", arc)
+                .on("mouseover", (event, d) => {
+                    const name = groups[d.index];
+                    tooltip
+                        .style("opacity", 0.9)
+                        .html(`<strong>${name}</strong>`)
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mousemove", event => {
+                    tooltip
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.style("opacity", 0);
+                });
+
+            // Optional: group label
+            group.append("text")
+                .each(d => { d.angle = (d.startAngle + d.endAngle) / 2; })
+                .attr("dy", ".35em")
+                .attr("transform", d => `
+                 rotate(${(d.angle * 180 / Math.PI - 90)})
+                 translate(${outerRadius + 10}, 0)
+                 ${d.angle > Math.PI ? "rotate(180)" : ""}
+               `)
+                .attr("text-anchor", d => d.angle > Math.PI ? "end" : "start")
+                .style("font-size", "12px")
+                .text(d => groups[d.index]);
+
+            // Step 6: Draw chords
+            const ribbon = d3.ribbon()
+                .radius(innerRadius);
+
+            g.selectAll("path.chord")
+                .data(chords)
+                .enter()
+                .append("path")
+                .attr("class", "chord")
+                .attr("d", ribbon)
+                .style("fill", d => color(d.source.index))
+                .style("stroke", d => d3.rgb(color(d.source.index)).darker())
+                .on("mouseover", (event, d) => {
+                    // Info about the chord: source & target groups, value
+                    const sourceName = groups[d.source.index];
+                    const targetName = groups[d.target.index];
+                    const chordValue = d.source.value; // same as d.target.value
+                    tooltip
+                        .style("opacity", 0.9)
+                        .html(`
+                        <strong>${sourceName}</strong> → <strong>${targetName}</strong><br/>
+                        Emissions: ${chordValue.toFixed(2)}
+                      `)
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mousemove", event => {
+                    tooltip
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.style("opacity", 0);
+                });
+        });
+    </script>
+</body>
+</html>
