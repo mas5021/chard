@@ -15,7 +15,7 @@
             text-align: center;
             margin: 20px 0 5px 0;
         }
-        #chart-container { /* Changed ID to chart-container */
+        #chart-container {
             display: flex;
             justify-content: center;
             align-items: center;
@@ -51,16 +51,27 @@
         }
         .groupArc {
             cursor: pointer;
+            transition: fill-opacity 0.2s; /* Added transition for smooth hover effect */
         }
         .groupArc:hover {
             fill-opacity: 0.7;
         }
+        .groupText {  /* Added class for group labels */
+            font-size: 12px;
+            fill: #555;
+            cursor: pointer; /* Add cursor style to indicate interactivity */
+            pointer-events: all; /* Ensure the text can receive pointer events */
+        }
+        .groupText:hover {
+             fill: #222; /* Change color on hover */
+        }
+
     </style>
 </head>
 <body>
     <h1>Chord Diagram: IPPU vs On-farm Electricity Use</h1>
 
-    <div id="chart-container"> 
+    <div id="chart-container">
         <svg id="chart"> </svg>
     </div>
     <div class="tooltip" id="tooltip"></div>
@@ -76,7 +87,7 @@
         const outerRadius = innerRadius * 1.08;             // arcs radius
 
         // Create SVG
-        const svg = d3.select("#chart") // Select the svg inside the container
+        const svg = d3.select("#chart")
             .attr("width", width)
             .attr("height", height);
 
@@ -105,8 +116,8 @@
             });
 
             // Convert sets to arrays
-            const IPPUCats = Array.from(IPPUSet).filter(d => d.trim() !== "");
-            const OnfarmCats = Array.from(onfarmSet).filter(d => d.trim() !== "");
+            const IPPUCats = Array.from(IPPUSet).filter(d => d !== "");
+            const OnfarmCats = Array.from(onfarmSet).filter(d => d !== "");
 
             // Combine them into one dimension:
             // First, all IPPU categories, then all On-farm Electricity Use categories
@@ -154,7 +165,8 @@
             // Step 3: Build chord layout
             const chord = d3.chord()
                 .padAngle(0.05) // spacing between chords
-                .sortSubgroups(d3.descending); // largest chord on top
+                .sortSubgroups(d3.descending) // largest chord on top
+                .sortChords(d3.descending);  // Sort chords by size as well - makes chart look better
             const chords = chord(matrix);
 
             // Step 4: Create arc generator
@@ -194,6 +206,7 @@
 
             // Optional: group label
             group.append("text")
+                .attr("class", "groupText")  // Apply the groupText class
                 .each(d => { d.angle = (d.startAngle + d.endAngle) / 2; })
                 .attr("dy", ".35em")
                 .attr("transform", d => `
@@ -203,7 +216,23 @@
                `)
                 .attr("text-anchor", d => d.angle > Math.PI ? "end" : "start")
                 .style("font-size", "12px")
-                .text(d => groups[d.index]);
+                .text(d => groups[d.index])
+                 .on("mouseover", (event, d) => { // Added for group text hover
+                    const name = groups[d.index];
+                    tooltip
+                        .style("opacity", 0.9)
+                        .html(`<strong>${name}</strong>`)
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                 })
+                .on("mousemove", event => {
+                    tooltip
+                        .style("left", (event.pageX + 15) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+                })
+                .on("mouseout", () => {
+                    tooltip.style("opacity", 0);
+                });
 
             // Step 6: Draw chords
             const ribbon = d3.ribbon()
