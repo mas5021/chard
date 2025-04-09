@@ -1,19 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Chord Diagram: IPPU vs On-farm Electricity Use</title>
+  <meta charset="utf-8">
+  <title>Chord Diagram with Filtering</title>
   <script src="https://d3js.org/d3.v6.min.js"></script>
   <style>
     body {
       font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
       background-color: #f9f9f9;
       margin: 0;
-      padding: 0;
+      padding: 20px;
     }
     h1 {
       text-align: center;
-      margin: 20px 0 5px 0;
+      margin-bottom: 10px;
+      color: #2c3e50;
+    }
+    #filters {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    #filters select {
+      padding: 5px;
+      font-size: 14px;
+      min-width: 200px;
+    }
+    #filters button {
+      padding: 6px 12px;
+      font-size: 14px;
+      cursor: pointer;
     }
     #chart {
       display: flex;
@@ -28,6 +45,7 @@
       background-color: #fff;
       border-radius: 8px;
       box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      background: radial-gradient(circle, #ffffff 0%, #f0f0f0 100%);
     }
     .tooltip {
       position: absolute;
@@ -40,48 +58,73 @@
       pointer-events: none;
       opacity: 0;
       transition: opacity 0.2s ease;
-      font-family: sans-serif;
     }
-    path.chord {
-      cursor: pointer;
-      transition: opacity 0.2s;
+    /* Chord diagram styling */
+    .axis-line {
+      stroke: #ddd;
+      stroke-width: 1.5px;
     }
-    path.chord:hover {
-      opacity: 0.6;
+    .grid-circle {
+      fill: none;
+      stroke: #e0e0e0;
+      stroke-dasharray: 3,3;
+      stroke-width: 1px;
+    }
+    .grid-label {
+      font-size: 10px;
+      fill: #666;
+      text-anchor: middle;
+      dominant-baseline: middle;
     }
     .groupArc {
       cursor: pointer;
     }
-    .groupArc:hover {
-      fill-opacity: 0.7;
+    .chord {
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .chord:hover {
+      opacity: 0.6;
     }
   </style>
 </head>
 <body>
+
 <h1>Chord Diagram: IPPU vs On-farm Electricity Use</h1>
+
+<div id="filters">
+  <div>
+    <label for="filterIPPU">Filter IPPU:</label><br/>
+    <select id="filterIPPU" multiple></select>
+  </div>
+  <div>
+    <label for="filterOnfarm">Filter On-farm Electricity Use:</label><br/>
+    <select id="filterOnfarm" multiple></select>
+  </div>
+  <div style="align-self: flex-end;">
+    <button id="applyFilter">Apply Filter</button>
+  </div>
+</div>
 
 <div id="chart"></div>
 <div class="tooltip" id="tooltip"></div>
 
 <script>
-  // CSV with your data
-  const csvUrl = "https://gist.githubusercontent.com/mas5021/546c5cb1aaaaed863bb098b86f71503e/raw/1897725dabe21080a628a0022fa79942c48e1483/merged_climate.csv";
+  // Use your dataset (update path if needed)
+  const csvUrl = "https://gist.githubusercontent.com/mas5021/546c5cb1aaaaed863bb098b86f71503e/raw/1897725dabe21080a628a0022fa79942c48e1483/merged_climate.csvs";
 
   // Dimensions
-  const width = 800;
-  const height = 800;
-  const innerRadius = Math.min(width, height) * 0.35; // chord radius
-  const outerRadius = innerRadius * 1.08;             // arcs radius
+  const width = 900, height = 900;
+  const innerRadius = Math.min(width, height) * 0.35;
+  const outerRadius = innerRadius * 1.08;
 
-  // Create SVG
+  // Create SVG and main group with margins for labels
   const svg = d3.select("#chart")
     .append("svg")
     .attr("width", width)
     .attr("height", height);
-
-  // Main group
   const g = svg.append("g")
-    .attr("transform", `translate(${width / 2}, ${height / 2})`);
+    .attr("transform", `translate(${width/2}, ${height/2})`);
 
   // Tooltip
   const tooltip = d3.select("#tooltip");
@@ -89,52 +132,64 @@
   // Color scale
   const color = d3.scaleOrdinal(d3.schemeCategory10);
 
-  // Data structures for unique categories
+  // Global storage for dataset and filter options
+  let allData = [];
   let IPPUSet = new Set();
   let onfarmSet = new Set();
 
-  // Step 1: Load CSV
-  d3.csv(csvUrl).then(data => {
+  // Populate filter dropdowns
+  function populateFilters() {
+    const filterIPPU = d3.select("#filterIPPU");
+    const filterOnfarm = d3.select("#filterOnfarm");
 
-    // Preprocess: find unique categories
-    data.forEach(d => {
-      // It is possible that some rows are missing these values.
-      if (d["IPPU"]) IPPUSet.add(d["IPPU"]);
-      if (d["On-farm Electricity Use"]) onfarmSet.add(d["On-farm Electricity Use"]);
+    // Clear existing options
+    filterIPPU.selectAll("option").remove();
+    filterOnfarm.selectAll("option").remove();
+
+    IPPUSet.forEach(d => {
+      filterIPPU.append("option")
+        .attr("value", d)
+        .text(d);
     });
+    onfarmSet.forEach(d => {
+      filterOnfarm.append("option")
+        .attr("value", d)
+        .text(d);
+    });
+  }
 
-    // Convert sets to arrays, filtering out undefined/null values.
-    const IPPUCats = Array.from(IPPUSet).filter(d => d && d.trim() !== "");
-    const OnfarmCats = Array.from(onfarmSet).filter(d => d && d.trim() !== "");
+  // Update the chord diagram using filtered data
+  function updateChord(filteredData) {
+    // First, aggregate the filtered data.
+    // Assume the data has columns "IPPU", "On-farm Electricity Use", "total_emission"
+    // Build sets of unique categories for each group (if filtering changes the sets)
+    const filteredIPPUs = new Set(filteredData.map(d => d["IPPU"]));
+    const filteredOnfarm = new Set(filteredData.map(d => d["On-farm Electricity Use"]));
+    const IPPUCats = Array.from(filteredIPPUs).filter(d => d.trim() !== "");
+    const OnfarmCats = Array.from(filteredOnfarm).filter(d => d.trim() !== "");
 
-    // Combine into one dimension:
+    // Combine groups; here we keep the same order: first IPPU, then On-farm Electricity Use.
     const groups = [...IPPUCats, ...OnfarmCats];
 
-    // Map group name to index
+    // Build a mapping from group name to index.
     const indexByName = new Map();
     groups.forEach((name, i) => indexByName.set(name, i));
 
-    // Prepare an n x n matrix
+    // Prepare an n x n matrix filled with zeros.
     const n = groups.length;
-    const matrix = [];
-    for (let i = 0; i < n; i++) {
-      matrix[i] = new Array(n).fill(0);
-    }
+    const matrix = Array.from({length: n}, () => new Array(n).fill(0));
 
-    // Step 2: Aggregate sum of total_emission by (IPPU, On-farm Electricity Use)
+    // Aggregate: sum total_emission for each (IPPU, On-farm Electricity Use) pair.
     const sumMap = {};
-    data.forEach(d => {
+    filteredData.forEach(d => {
       const iCat = d["IPPU"];
       const oCat = d["On-farm Electricity Use"];
       const emission = +d["total_emission"] || 0;
-      if (!iCat || !oCat) return; // Skip rows with missing values
-
       if (!sumMap[iCat]) sumMap[iCat] = {};
       if (!sumMap[iCat][oCat]) sumMap[iCat][oCat] = 0;
       sumMap[iCat][oCat] += emission;
     });
-
-    // Populate the matrix with aggregated values
+    // Fill matrix – only fill across the two sets.
     IPPUCats.forEach(iCat => {
       const iIndex = indexByName.get(iCat);
       OnfarmCats.forEach(oCat => {
@@ -145,63 +200,65 @@
       });
     });
 
-    // Step 3: Build chord layout
+    // Create chord layout from matrix
     const chord = d3.chord()
       .padAngle(0.05)
       .sortSubgroups(d3.descending);
     const chords = chord(matrix);
 
-    // Step 4: Create arc generator
+    // Create arc generator for group arcs
     const arc = d3.arc()
       .innerRadius(innerRadius)
       .outerRadius(outerRadius);
 
-    // Step 5: Draw group arcs
-    const group = g.selectAll("g.group")
+    // Clear previous diagram (if any)
+    g.selectAll("*").remove();
+
+    // Draw group arcs
+    const groupSelection = g.selectAll("g.group")
       .data(chords.groups)
       .enter()
       .append("g")
       .attr("class", "group");
 
-    group.append("path")
+    groupSelection.append("path")
       .attr("class", "groupArc")
       .style("fill", d => color(d.index))
       .style("stroke", d => d3.rgb(color(d.index)).darker())
       .attr("d", arc)
       .on("mouseover", (event, d) => {
         const name = groups[d.index];
-        tooltip
-          .style("opacity", 0.9)
+        tooltip.style("opacity", 0.9)
           .html(`<strong>${name}</strong>`)
           .style("left", (event.pageX + 15) + "px")
           .style("top", (event.pageY - 28) + "px");
       })
       .on("mousemove", event => {
-        tooltip
-          .style("left", (event.pageX + 15) + "px")
+        tooltip.style("left", (event.pageX + 15) + "px")
           .style("top", (event.pageY - 28) + "px");
       })
       .on("mouseout", () => {
         tooltip.style("opacity", 0);
       });
 
-    // Optional: Add group labels outside arcs
-    group.append("text")
+    // Group labels – positioned outside each arc.
+    groupSelection.append("text")
       .each(d => { d.angle = (d.startAngle + d.endAngle) / 2; })
       .attr("dy", ".35em")
       .attr("transform", d => `
-         rotate(${(d.angle * 180 / Math.PI - 90)})
-         translate(${outerRadius + 10}, 0)
-         ${d.angle > Math.PI ? "rotate(180)" : ""}
-       `)
+        rotate(${d.angle * 180 / Math.PI - 90})
+        translate(${outerRadius + 10},0)
+        ${d.angle > Math.PI ? "rotate(180)" : ""}
+      `)
       .attr("text-anchor", d => d.angle > Math.PI ? "end" : "start")
       .style("font-size", "12px")
       .text(d => groups[d.index]);
 
-    // Step 6: Draw chords
+    // Chord ribbon generator
     const ribbon = d3.ribbon()
       .radius(innerRadius);
 
+    // Draw chords
     g.selectAll("path.chord")
       .data(chords)
       .enter()
@@ -214,24 +271,63 @@
         const sourceName = groups[d.source.index];
         const targetName = groups[d.target.index];
         const chordValue = d.source.value;
-        tooltip
-          .style("opacity", 0.9)
-          .html(`
-            <strong>${sourceName}</strong> → <strong>${targetName}</strong><br/>
-            Emissions: ${chordValue.toFixed(2)}
-          `)
+        tooltip.style("opacity", 0.9)
+          .html(`<strong>${sourceName}</strong> → <strong>${targetName}</strong><br/>Emissions: ${chordValue.toFixed(2)}`)
           .style("left", (event.pageX + 15) + "px")
           .style("top", (event.pageY - 28) + "px");
       })
       .on("mousemove", event => {
-        tooltip
-          .style("left", (event.pageX + 15) + "px")
+        tooltip.style("left", (event.pageX + 15) + "px")
           .style("top", (event.pageY - 28) + "px");
       })
       .on("mouseout", () => {
         tooltip.style("opacity", 0);
       });
+  }
+
+  // Called initially and on each filter update.
+  function updateChart() {
+    // If no filter selected, use all data.
+    const selectedIPPUs = Array.from(d3.select("#filterIPPU").node().selectedOptions).map(o => o.value);
+    const selectedOnfarm = Array.from(d3.select("#filterOnfarm").node().selectedOptions).map(o => o.value);
+
+    let filteredData = allData;
+    if (selectedIPPUs.length > 0) {
+      filteredData = filteredData.filter(d => selectedIPPUs.includes(d["IPPU"]));
+    }
+    if (selectedOnfarm.length > 0) {
+      filteredData = filteredData.filter(d => selectedOnfarm.includes(d["On-farm Electricity Use"]));
+    }
+    updateChord(filteredData);
+  }
+
+  // Load the CSV and populate filters and initial diagram
+  d3.csv(csvUrl).then(data => {
+    // Convert numeric columns (assumes "total_emission" is numeric)
+    data.forEach(d => {
+      d["total_emission"] = +d["total_emission"];
+    });
+    allData = data;
+
+    // Build unique sets for filter dropdowns
+    data.forEach(d => {
+      if (d["IPPU"] && d["IPPU"].trim() !== "") {
+        IPPUSet.add(d["IPPU"]);
+      }
+      if (d["On-farm Electricity Use"] && d["On-farm Electricity Use"].trim() !== "") {
+        onfarmSet.add(d["On-farm Electricity Use"]);
+      }
+    });
+
+    // Populate filter dropdowns
+    populateFilters();
+
+    // Draw initial diagram using full data
+    updateChord(allData);
   });
+
+  // Event listener for the filter button
+  d3.select("#applyFilter").on("click", updateChart);
 </script>
 </body>
 </html>
